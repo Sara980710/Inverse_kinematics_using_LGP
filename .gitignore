@@ -1,0 +1,9 @@
+# exclude everything
+result/*
+result2/*
+
+# exception to the rule
+!result/.gitkeep 
+!result2/.gitkeep 
+
+__pycache__
