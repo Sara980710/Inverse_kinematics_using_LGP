@@ -1,0 +1,20 @@
+tournament_parameter = 0.75
+tournament_size = 5
+crossover_probability = 0.3
+penalty_term = 0.1
+best_individual_copies = 2
+population_size = 300
+variable_registers = array([0.49377737, 0.71996413, 0.04335349, 0.37459412])
+registers = [ 3.14159265 -1.          2.        ]
+max_len_cromosome = 400
+nr_datapoints = 200
+nr_operators = 8
+
+#elif operator_f == 4:
+#    result = np.cos(operand1)
+#elif operator_f == 5:
+#    result = np.sin(operand1)
+elif operator_f == 4:
+    result = np.arccos((operand1 % 2)-1)
+elif operator_f == 5:
+    result = np.arcsin((operand1 % 2)-1)

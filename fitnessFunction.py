@@ -1,25 +1,29 @@
 import numpy as np
 from forwKinematicsModel import ForwKinematicsModel
 from numba import njit
-import math
 
 
 class FittnessFunction(ForwKinematicsModel):
-    def __init__(self, constant_registers, nr_variable_registers, nr_datapoints, datapoint_registers = []) -> None:
+    def __init__(self, constant_registers, variable_registers, nr_datapoints) -> None:
         super().__init__()
 
         # Boundaries
-        # Table is the restriction in z-axis
+        self.sphere_center_upper = np.array([0, 0, self.L[2] + self.L[3]])
+        self.sphere_radius_outer = np.sqrt((self.L[6] + self.L[8] + self.L[9]) ** 2 + (self.L[4]-self.L[5])**2)
+        self.sphere_radius_inner_upper = np.sqrt(np.sqrt(self.L[8] ** 2 + (self.L[7] + self.L[9])**2) ** 2 + (self.L[4]-self.L[5])**2)
+        self.sphere_center_lower = np.array([0, 0, self.L[2] + self.L[3] - self.L[8]])
+        self.sphere_radius_inner_lower = np.sqrt(self.L[9] **2 + (self.L[4] - self.L[5]) ** 2)
+        self.upper_lower_limit = self.L[2] + self.L[3] - self.L[8]
+
         self.max_pos = np.array([
-            np.sqrt((self.L[6] + self.L[8] + self.L[9]) ** 2 + self.L[4]**2),  # x
-            np.sqrt((self.L[6] + self.L[8] + self.L[9]) ** 2 + self.L[4]**2),  # y
-            self.L[1] + self.L[2] + self.L[3] + \
-            self.L[8] + self.L[9]  # z
+            self.sphere_radius_outer,  # x
+            self.sphere_radius_outer,  # y
+            self.L[2] + self.L[3] + self.L[8] + self.L[9]  # z
             ])  # meter
         
         self.min_pos = np.array([
-            -(-self.L[1] + self.L[9]),  # x
-            -np.sqrt((self.L[6] + self.L[8] + self.L[9]) ** 2 + self.L[4]**2),  # y
+            -(self.L[6] + self.L[8] + self.L[9]),  # x
+            self.L[6] - self.L[7] - self.L[9],  # y
             self.L[2] + self.L[3] - self.L[8] - self.L[9]  # z
             ])  # meter
         
@@ -27,40 +31,46 @@ class FittnessFunction(ForwKinematicsModel):
         self.min_angle = np.array([0, 0, 0])
 
         # Registers & operators
-        assert(nr_variable_registers >= 3)
-
         self.nr_datapoints = nr_datapoints
-        one_register = np.concatenate((np.zeros(nr_variable_registers), np.array(constant_registers)))
+        self.constant_registers = constant_registers
+        one_register = np.concatenate((np.zeros(3), variable_registers, np.array(constant_registers)))
         self.registers = np.array([one_register, ]*nr_datapoints)
-        
+
         self.nr_registers = self.registers.shape[1]
-        self.nr_variable_registers = nr_variable_registers
-        self.nr_constant_registers = len(constant_registers)
+        self.nr_variable_registers = self.nr_registers - \
+            len(self.constant_registers)
+        self.randomize_input_pos()
         
-        if len(datapoint_registers) > 1:
-            self.registers = datapoint_registers
-        else:
-            self.randomize_input_pos()
+        assert(self.nr_variable_registers >= 3)
 
     def randomize_input_pos(self):
-        variable_registers = np.random.rand(self.nr_datapoints, self.nr_variable_registers)
+        # restrict input values (positions)
+        points = self.min_pos + np.random.rand(self.nr_datapoints, 3)*(self.max_pos - self.min_pos)
 
-        # restrict input
-        variable_registers[:, :3] = self.min_pos + variable_registers[:, :3]*(self.max_pos - self.min_pos)
-        
-        # restrict other values
-        min_max = 5
-        variable_registers[:, 3:] = -min_max + variable_registers[:, 3:]*(min_max - (-min_max))
+        value_outer = (self.sphere_radius_outer ** 2)
+        value_inner_upper = (self.sphere_radius_inner_upper ** 2)
+        value_inner_lower = (self.sphere_radius_inner_lower ** 2)
+        for i,point in enumerate(points):
+            value_1 = np.sum(np.square(point - self.sphere_center_upper))
+            value_2 = np.sum(np.square(point - self.sphere_center_lower))
+                    
+            while (value_1 > value_outer) or \
+                    ((point[2] > self.upper_lower_limit) and (value_1 < value_inner_upper)) or \
+                    ((point[2] <= self.upper_lower_limit) and (value_2 < value_inner_lower)):
+                       
+                point = self.min_pos + \
+                    np.random.rand(3)*(self.max_pos - self.min_pos)
+                value_1 = np.sum(
+                    np.square(point - self.sphere_center_upper))
+                value_2 = np.sum(
+                    np.square(point - self.sphere_center_lower))
+            points[i] = point
 
-        self.registers[:,:self.nr_variable_registers] = variable_registers
+        self.registers[:, :3] = points
     
     def decode_cromosome(self, chromosome):
-        registers_all = np.copy(self.registers)
-        angles = decode_cromosome_numba(chromosome, registers_all, self.max_angle)
-        if np.isnan(angles).any():
-            np.save(f"result/error_register.npy", self.registers)
-            np.save(f"result/error_cromosome.npy", chromosome)
-        assert(not np.isnan(angles).any())
+        angles = decode_cromosome_numba(chromosome, np.copy(self.registers), self.max_angle)
+        
         return angles
 
     def get_error(self, pred_angles):
@@ -77,39 +87,48 @@ def decode_cromosome_numba(chromosome, registers_all, max_angle):
     len_cromosome = len(chromosome)
     for registers in registers_all:
         for gene_i in range(0, len_cromosome-1, 4):
+            # Get instruction data
             operator_f = int(chromosome[gene_i])
             destination_i = int(chromosome[gene_i+1])
             operand1 = registers[int(chromosome[gene_i+2])]
+            operand2 = registers[int(chromosome[gene_i+3])]
+
+            # Restrict
             if operand1 > 1000000.0:
                 operand1 = 1000000.0
             elif operand1 < -1000000.0:
                 operand1 = -1000000.0
-            operand2 = registers[int(chromosome[gene_i+3])]
             if operand2 > 1000000.0:
                 operand2 = 1000000.0
             elif operand2 < -1000000.0:
                 operand2 = -1000000.0
+
+            # Perform instruction
             if operator_f == 0:
-                registers[destination_i] = operand1 + operand2
+                result = operand1 + operand2
             elif operator_f == 1:
-                registers[destination_i] = operand1 - operand2
+                result = operand1 - operand2
             elif operator_f == 2:
-                registers[destination_i] = operand1 * operand2
+                result = operand1 * operand2
             elif operator_f == 3:
                 if operand2 == 0:
-                    registers[destination_i] = 1000000
+                    result = 1000000.0
                 else:
-                    registers[destination_i] = operand1 / operand2
+                    result = operand1 / operand2
             elif operator_f == 4:
-                registers[destination_i] = np.cos(operand1)
+                result = np.cos(operand1)
             elif operator_f == 5:
-                registers[destination_i] = np.sin(operand1)
+                result = np.sin(operand1)
             elif operator_f == 6:
-                registers[destination_i] = np.arcsin(operand1%1)
+                result = np.arccos((operand1 % 2)-1)
             elif operator_f == 7:
-                registers[destination_i] = np.arccos(operand1%1)
+                result = np.arcsin((operand1 % 2)-1)
 
-    return np.absolute(np.remainder(registers_all[:, :3], max_angle))
+            # Update register
+            registers[destination_i] = result
+
+    # Return angles restricted to max_angles 
+    return np.mod(registers_all[:, :3], max_angle)
 
 def test_class():
     print("Testing class: fitness_function()")
@@ -132,7 +151,6 @@ def test_class():
     ff.registers = np.copy(r)
     ff_angles = ff.decode_cromosome(chromosome)
 
-    # + - * /
     # manual calculations
     actual = np.array(r_one[0:3])
 
@@ -148,8 +166,8 @@ def test_class():
     assert (ff_angles[:, 0] == manual_angles[0]).all(), f"Test angle 1: {manual_angles[0]} is not {ff_angles[:, 0]}"
     assert (ff_angles[:, 1] == manual_angles[1]).all(), f"Test angle 2: {manual_angles[1]} is not {ff_angles[:, 1]}"
     assert (ff_angles[:, 2] == manual_angles[2]).all(), f"Test angle 3: {manual_angles[2]} is not {ff_angles[:, 2]}"
-    #### TEST: CALCULATION OF ERROR ####
 
+    #### TEST: CALCULATION OF ERROR ####
     # Calc Error using fittness function
     ff_error = ff.get_error(ff_angles)
 

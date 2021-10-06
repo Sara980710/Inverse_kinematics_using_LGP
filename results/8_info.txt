@@ -1,0 +1,11 @@
+tournament_parameter = 0.75
+tournament_size = 5
+crossover_probability = 0.3
+penalty_term = 0.1
+best_individual_copies = 3
+population_size = 300
+variable_registers = array([0.2569135 , 0.30152097, 0.56541544, 0.30562671])
+registers = [ 3.14159265 -1.          2.        ]
+max_len_cromosome = 400
+nr_datapoints = 200
+nr_operators = 8
